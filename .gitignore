@@ -1,0 +1,6 @@
+frames_*
+frames_*/*
+*.vtk
+*.mp4
+src/__pycache__
+src/__pycache__/*

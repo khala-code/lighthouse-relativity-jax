@@ -1,21 +1,35 @@
 """
-Lighthouse Relativity Simulation Source Package
+Lighthouse Relativity Engine
+============================
+Native 3D OZJ Scale-Space Manifold Engine.
 """
 
-from .topology import create_klein_grid, pad_klein_bc, laplacian_klein, klein_bottle_3d
-from .operators import init_state_fields, dbi_radical, extended_bloch_rhs, soft_clamp_state
-from .solver import run_simulation
-from .visualization import plot_field_and_defects
+from .topology import (
+    create_klein_grid,
+    laplacian_klein,
+    klein_bottle_3d,
+)
+from .operators import (
+    extended_bloch_rhs,
+    soft_clamp_state,
+    create_quartz_lattice_with_al_impurities,
+    compute_physical_larmor_field,
+    solve_dynamic_gr_poisson_metric,
+)
+from .solver import (
+    run_simulation,
+    load_pre_wound_topology_via_action,
+)
 
 __all__ = [
     "create_klein_grid",
-    "pad_klein_bc",
     "laplacian_klein",
     "klein_bottle_3d",
-    "init_state_fields",
-    "dbi_radical",
     "extended_bloch_rhs",
     "soft_clamp_state",
+    "create_quartz_lattice_with_al_impurities",
+    "compute_physical_larmor_field",
+    "solve_dynamic_gr_poisson_metric",
     "run_simulation",
-    "plot_field_and_defects",
+    "load_pre_wound_topology_via_action",
 ]
