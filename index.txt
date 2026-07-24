@@ -1,0 +1,10 @@
+lighthouse-relativity-jax/
+├── Lighthouse_Relativity_Formalization_Reference.md
+├── requirements.txt
+├── src/
+│   ├── __init__.py
+│   ├── topology.py       # Klein bottle grid mesh & non-orientable boundary conditions
+│   ├── operators.py      # Branchless Extended Bloch engine & DBI soft-clamping
+│   ├── solver.py         # JAX timestepping loop using jax.lax.scan
+│   └── visualization.py  # Field & defect trajectory plotting
+└── main.py               # Entry point script
