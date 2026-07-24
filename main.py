@@ -1,9 +1,7 @@
 """
 Lighthouse Relativity: Main Engine Entrypoint
 ============================================
-Runs 3D OZJ Scale-Space Kleinion simulations across gravitational collapse,
-full cosmic evolution, binary black hole inspirals, and quartz lattice resonance.
-Exports trajectory frames, diagnostic relaxation plots, and VTK datasets.
+Runs 3D OZJ Scale-Space Kleinion simulations with upstream gauge and larmor initialization.
 """
 
 import os
@@ -24,13 +22,13 @@ def main():
     parser.add_argument(
         "-c", "--config",
         type=str,
-        default="full_cosmic_evolution",
+        default="binary_merger",
         choices=list(CONFIG_PRESETS.keys()),
         help="Simulation preset config name"
     )
     parser.add_argument("--steps", type=int, default=None, help="Override number of simulation time steps")
     parser.add_argument("--dt", type=float, default=None, help="Override integration time step size")
-    parser.add_argument("--stride", type=int, default=50, help="Frame rendering stride for video animation")
+    parser.add_argument("--stride", type=int, default=20, help="Frame rendering stride for video animation")
     parser.add_argument("--vtk", action="store_true", help="Export 3D volumetric VTK dataset (.vtk) for ParaView")
     args = parser.parse_args()
 
@@ -51,15 +49,28 @@ def main():
     )
     key = jax.random.PRNGKey(cfg.seed)
 
-    action_preset = "full_cosmic_evolution" if args.config in ["early_universe", "full_cosmic_evolution", "cosmic_web"] else "flat_vacuum"
+    if args.config == "binary_merger":
+        action_preset = "binary_merger_initial"
+    elif args.config in ["early_universe", "full_cosmic_evolution", "cosmic_web"]:
+        action_preset = "full_cosmic_evolution"
+    else:
+        action_preset = "flat_vacuum"
+
     s_0, drive_u = load_pre_wound_topology_via_action(grid=grid, action_preset_name=action_preset, key=key)
 
     X, Y = grid['X'], grid['Y']
-    void_density = cfg.void_peak * jnp.exp(-((X**2 + Y**2) / (2.0 * (cfg.void_sigma**2))))
 
-    omega_larmor_field = None
-    w_larmor = 0.0
+    if args.config == "binary_merger":
+        r0 = 1.5
+        x1, y1 =  r0, 0.0
+        x2, y2 = -r0, 0.0
+        Pi1 = cfg.void_peak * jnp.exp(-(((X - x1)**2 + (Y - y1)**2) / (2.0 * (cfg.void_sigma**2))))
+        Pi2 = cfg.void_peak * jnp.exp(-(((X - x2)**2 + (Y - y2)**2) / (2.0 * (cfg.void_sigma**2))))
+        void_density = Pi1 + Pi2
+    else:
+        void_density = cfg.void_peak * jnp.exp(-((X**2 + Y**2) / (2.0 * (cfg.void_sigma**2))))
 
+    # Upfront Larmor Field Default Setup (Zero-branching upstream)
     if args.config == "quartz_larmor":
         key, lattice_key = jax.random.split(key)
         pi_lattice, al_positions = create_quartz_lattice_with_al_impurities(
@@ -74,8 +85,10 @@ def main():
         void_density = pi_lattice
         omega_larmor_field = compute_physical_larmor_field(grid, al_positions, B0=cfg.B0, al_sigma=cfg.void_sigma)
         w_larmor = 1.0
+    else:
+        omega_larmor_field = jnp.zeros_like(void_density)
+        w_larmor = 0.0
 
-    is_merger = (args.config == "binary_merger")
     is_full_evo = (args.config == "full_cosmic_evolution")
 
     trajectory, final_state = run_simulation(
@@ -83,6 +96,7 @@ def main():
         s_init=s_0,
         u=drive_u,
         Pi_V=void_density,
+        omega_larmor_field=omega_larmor_field,
         dt=dt,
         num_steps=num_steps,
         Xi=cfg.Xi,
@@ -91,19 +105,16 @@ def main():
         alpha=cfg.alpha,
         H0=cfg.H0,
         omega_meta=cfg.omega_meta,
-        void_peak=cfg.void_peak,
-        void_sigma=cfg.void_sigma,
+        D_z=cfg.D_z,
+        lambda_scale=cfg.lambda_scale,
         noise_std=cfg.noise_std,
         key=key,
-        omega_larmor_field=omega_larmor_field,
         w_larmor=w_larmor,
         f_triad=cfg.f_triad,
         B1=cfg.B1,
-        is_merger=is_merger,
         is_full_evolution=is_full_evo,
     )
 
-    # 1. Render Output Animation Frames
     output_dir = f"frames_{args.config}"
     print(f"🎨 Rendering output frames to '{output_dir}/'...")
     render_trajectory_frames(
@@ -116,7 +127,6 @@ def main():
         H0=cfg.H0
     )
 
-    # 2. Render Transverse Excitation & Defect Relaxation Diagnostic Chart
     diag_filename = f"lighthouse_relaxation_{args.config}.png"
     plot_field_and_defects(
         grid=grid,
@@ -126,7 +136,6 @@ def main():
         H0=cfg.H0
     )
 
-    # 3. Export 3D Volumetric VTK Dataset
     if args.vtk or True:
         vtk_filename = f"kleinion_{args.config}.vtk"
         export_trajectory_to_vtk_volume(

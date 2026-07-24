@@ -2,7 +2,7 @@
 Lighthouse Relativity: Operators Module (JAX)
 ===========================================
 Native 3D Extended Bloch differential operator with zero control-flow branching.
-Supports dynamic time-varying scale factors a(t), Hubble drag H(t), and spectral GR.
+Universal dynamic GR feedback loop driven entirely by topological charge density.
 """
 
 import jax
@@ -19,6 +19,16 @@ GAMMA_27AL = +69.76e6
 def dbi_radical(Pi_V: jnp.ndarray, alpha: float = 0.1) -> jnp.ndarray:
     return 1.0 / jnp.sqrt(1.0 + alpha * (Pi_V ** 2))
 
+@jax.jit
+def vertical_scale_laplacian(s: jnp.ndarray, dz: float) -> jnp.ndarray:
+    """Computes second derivative along the Z scale axis for inter-layer renormalization."""
+    return (jnp.roll(s, 1, axis=2) - 2.0 * s + jnp.roll(s, -1, axis=2)) / (dz ** 2)
+
+
+@jax.jit
+def vertical_scale_gradient(s: jnp.ndarray, dz: float) -> jnp.ndarray:
+    """Computes first derivative along the Z scale axis for chiral vertical torque."""
+    return (jnp.roll(s, -1, axis=2) - jnp.roll(s, 1, axis=2)) / (2.0 * dz)
 
 @jax.jit
 def compute_topological_charge_density_jax(s: jnp.ndarray, dx: float, dy: float) -> jnp.ndarray:
@@ -38,7 +48,8 @@ def solve_dynamic_gr_poisson_metric(
     m_screening: float = 0.2
 ) -> jnp.ndarray:
     """
-    Branchless Spectral Poisson Solver: Solves (Del^2 - m^2) Pi_V = -eta * |q|^2 in Fourier Space.
+    Branchless Spectral Poisson Solver: Computes dynamic gravitational potential Pi_V
+    directly from local topological charge density energy |q|^2 in Fourier space.
     """
     dx, dy = grid['dx'], grid['dy']
 
@@ -115,12 +126,12 @@ def extended_bloch_rhs(
     s: jnp.ndarray,
     u: jnp.ndarray,
     Pi_V: jnp.ndarray,
+    omega_larmor_field: jnp.ndarray,
     grid: Dict[str, Any],
     t_step: float = 0.0,
     a_t: float = 1.0,
     H_t: float = 0.0,
     omega_meta_t: float = 0.0,
-    omega_larmor_field: Optional[jnp.ndarray] = None,
     w_larmor: float = 0.0,
     Xi: float = 0.5,
     T1: float = 10.0,
@@ -128,28 +139,24 @@ def extended_bloch_rhs(
     alpha: float = 0.1,
     s0_z: float = 1.0,
     D_spatial: float = 0.05,
+    D_z: float = 0.05,
+    lambda_scale: float = 0.02,
     f_triad: Tuple[float, float, float] = (0.0, 0.0, 0.0),
     B1: float = 0.0,
     kappa_grav: float = 0.2,
-    dynamic_gr: bool = True,
 ) -> jnp.ndarray:
-    """Evaluates RHS natively with time-varying scale factor a(t) and Hubble drag H(t)."""
-    dx, dy = grid['dx'], grid['dy']
+    dx, dy, dz = grid['dx'], grid['dy'], grid['dz']
 
-    if omega_larmor_field is None:
-        omega_larmor_field = jnp.zeros_like(Pi_V)
-
-    # 1. Dynamic Poisson GR Metric
-    Pi_V_gr = solve_dynamic_gr_poisson_metric(s, grid, eta_grav=8.0, m_screening=0.15)
-    w_gr = 1.0 if dynamic_gr else 0.0
-    Pi_V_eff = w_gr * Pi_V_gr + (1.0 - w_gr) * Pi_V
+    # 1. Superimpose Background Metric Wells (Pi_V) with Dynamic Charge-Density Backreaction
+    Pi_V_dynamic = solve_dynamic_gr_poisson_metric(s, grid, eta_grav=8.0, m_screening=0.15)
+    Pi_V_eff = Pi_V + Pi_V_dynamic
 
     # 2. Dynamic Meta-Clock Phase
     phi_meta = omega_meta_t * t_step
     gamma_euclidean = 0.5 * (1.0 + jnp.cos(phi_meta))
     gamma_lorentzian = 1.0 - gamma_euclidean
 
-    # 3. Dynamic Gravitational Torque Field
+    # 3. Gravitational Gradient Torque Field
     dPi_dx = jnp.gradient(Pi_V_eff, dx, axis=0)
     dPi_dy = jnp.gradient(Pi_V_eff, dy, axis=1)
     u_grav = -kappa_grav * jnp.stack([dPi_dx, dPi_dy, jnp.zeros_like(Pi_V_eff)], axis=-1)
@@ -178,7 +185,7 @@ def extended_bloch_rhs(
     Omega_eff = jnp.stack([jnp.zeros_like(Omega_z), jnp.zeros_like(Omega_z), Omega_z], axis=-1)
     precession = jnp.cross(s, Omega_eff)
 
-    # 8. Dissipation & Hubble Friction Drag (-2 * H(t) * s)
+    # 8. Dissipation & Hubble Friction Drag
     sx, sy, sz = s[..., 0], s[..., 1], s[..., 2]
     damping = jnp.stack([
         sx / T2_eff[..., 0],
@@ -186,14 +193,16 @@ def extended_bloch_rhs(
         (sz - s0_z) / T1_eff[..., 0]
     ], axis=-1) + (2.0 * H_t * s)
 
-    # 9. Non-Linear Scale Torque & Dilated Spatial Diffusion (1 / a(t)^2)
+    # 9. Non-Linear Scale Torque & Hierarchical Scale-Space Coupling
     dot_su = jnp.sum(s * u_total, axis=-1, keepdims=True)
     cross_su = jnp.cross(s, u_total)
     nonlinear_torque = Xi * dot_su * cross_su
 
     spatial_diffusion = (D_spatial / (a_t ** 2)) * laplacian_klein(s, grid)
+    scale_rigidity = D_z * vertical_scale_laplacian(s, dz)
+    chiral_scale_torque = lambda_scale * jnp.cross(s, vertical_scale_gradient(s, dz))
 
-    return precession - damping + nonlinear_torque + spatial_diffusion
+    return precession - damping + nonlinear_torque + spatial_diffusion + scale_rigidity + chiral_scale_torque
 
 
 @jax.jit
