@@ -1,0 +1,44 @@
+simulation:
+  name: "binary_merger"
+  resolution: [64, 64]
+  nz_layers: 8
+  domain_extents: [6.283185, 6.283185, 10.0]
+  
+  solver_parameters:
+    dt: 0.002                  # Finer time step to accurately track multi-orbit phase evolution
+    num_steps: 4000            # Extended runtime budget to capture the full inspiral ring-down
+    xi: 0.95                   
+    t1: 40.0
+    t2: 5.0
+    alpha: 0.8                 
+    h0: 0.0
+    omega_meta: 0.05
+    kappa_grav: 0.9            
+    d_spatial: 0.04
+    d_z: 0.05
+    lambda_scale: 0.04
+    noise_std: 0.002
+
+  seam_operator:
+    parity_inversion_y: true
+    octant_coupling_tensor: [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0]
+
+initial_conditions:
+  t_axis_start: 131                  
+  
+  defect_clusters:
+    - cluster_id: 1
+      complex_phase_space_z: [-2.2 + 1.4j, 0.0 + 0.0j] # Wider separation (-2.2) + positive orbital momentum (+1.4j)
+      octant_span_mask: 0x33
+      nested_ozj_node:
+        local_omega: 2
+        local_zeta_phase: 0.5
+        local_j_invariant: 1728.0
+
+    - cluster_id: 2
+      complex_phase_space_z: [2.2 - 1.4j, 0.0 + 0.0j]  # Symmetrical wider separation (+2.2) + counter-rotating momentum (-1.4j)
+      octant_span_mask: 0xCC
+      nested_ozj_node:
+        local_omega: -2
+        local_zeta_phase: 0.5
+        local_j_invariant: 1728.0

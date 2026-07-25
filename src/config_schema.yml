@@ -1,0 +1,31 @@
+simulation:
+  name: "recursive_ozj_topological_simulation"
+  resolution: [512, 512]
+  
+  seam_operator:
+    parity_inversion_y: true
+    octant_coupling_tensor: [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0]
+
+initial_conditions:
+  t_axis_start: 163                    # Global prime-locked starting T-value (Heegner threshold)
+  
+  defect_clusters:
+    - cluster_id: 1
+      # Unified complex phase-space coordinate: Z = q + i*p
+      complex_phase_space_z: [256.0 + 0.0j, 256.0 + 0.0j] 
+      octant_span_mask: 0x0F
+      
+      # Nested OZJ sub-stack for recursive scale invariance
+      nested_ozj_node:
+        local_omega: 3                 # Quantized integer winding rate for this specific defect node
+        local_zeta_phase: 0.5          # Local critical strip anchor
+        local_j_invariant: 1728.0      # Local modular conformal shape baseline
+
+    - cluster_id: 2
+      complex_phase_space_z: [384.0 + 0.0j, 256.0 + 0.0j]
+      octant_span_mask: 0xF0
+      
+      nested_ozj_node:
+        local_omega: -3
+        local_zeta_phase: 0.5
+        local_j_invariant: 8000.0

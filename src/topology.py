@@ -2,8 +2,7 @@
 Lighthouse Relativity: Topology Module (JAX)
 =========================================
 100% 3D OZJ Scale-Space Manifold. No 2D fallbacks.
-Crossing the non-orientable y-neck twists vector parity AND shifts scale layer k.
-Pre-computes spatial Fourier wavenumber grids for dynamic spectral GR solvers.
+Crossing the non-orientable y-neck twists vector parity and couples scale layers via the 8-octant Seam Operator.
 """
 
 import jax
@@ -17,9 +16,10 @@ def create_klein_grid(
     Nz: int = 8, 
     Lx: float = 6.283185, 
     Ly: float = 6.283185, 
-    Lz: float = 10.0
+    Lz: float = 10.0,
+    seam_config: Dict[str, Any] = None
 ) -> Dict[str, Any]:
-    """Creates a 3D mesh grid centered at domain centroid (0, 0, 0)."""
+    """Creates a 3D mesh grid centered at domain centroid (0, 0, 0) with Seam Operator configurations."""
     dx, dy = Lx / Nx, Ly / Ny
     dz = Lz / Nz
     
@@ -36,6 +36,12 @@ def create_klein_grid(
     Kx, Ky, Kz = jnp.meshgrid(kx, ky, kz, indexing='ij')
     K_sq_spatial = Kx**2 + Ky**2 + Kz**2
     
+    if seam_config is None:
+        seam_config = {
+            "parity_inversion_y": True,
+            "octant_coupling_tensor": [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0]
+        }
+    
     return {
         'Nx': Nx, 'Ny': Ny, 'Nz': Nz,
         'dx': dx, 'dy': dy, 'dz': dz,
@@ -43,23 +49,28 @@ def create_klein_grid(
         'X': X, 'Y': Y, 'K': K,
         'x': x, 'y': y, 'k': k,
         'K_sq_spatial': K_sq_spatial,
+        'seam_config': seam_config,
     }
 
 
 @jax.jit
-def apply_non_orientable_neck_twist(field: jnp.ndarray) -> jnp.ndarray:
-    """Applies P_y parity twist [1.0, -1.0, 1.0] across trailing vector dimension."""
-    parity_vector = jnp.array([1.0, -1.0, 1.0])
-    return field * parity_vector
+def apply_non_orientable_neck_twist(field: jnp.ndarray, parity_multiplier: jnp.ndarray = jnp.array([1.0, -1.0, 1.0])) -> jnp.ndarray:
+    """Applies parity twist across trailing vector dimension using the octant coupling state."""
+    return field * parity_multiplier
 
 
 @jax.jit
 def laplacian_klein(s: jnp.ndarray, grid: Dict[str, Any]) -> jnp.ndarray:
     """
     Branchless 3D Laplacian for stacked OZJ Scale-Space tensors.
-    Twists parity AND shifts scale layer k across the y-boundary.
+    Twists parity and shifts scale layer k across the y-boundary using Seam Operator parameters.
     """
     dx, dy, dz = grid['dx'], grid['dy'], grid['dz']
+    seam_cfg = grid.get('seam_config', {})
+    
+    # Extract coupling factors or default to standard parity inversion [1.0, -1.0, 1.0]
+    coupling_tensor = jnp.array(seam_cfg.get("octant_coupling_tensor", [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0]))
+    parity_vector = jnp.array([1.0, -1.0, 1.0]) * jnp.sign(coupling_tensor[0])
 
     # 1. Orientable X rolls and Scale-depth Z rolls
     s_xp = jnp.roll(s, shift=1, axis=0)
@@ -78,9 +89,9 @@ def laplacian_klein(s: jnp.ndarray, grid: Dict[str, Any]) -> jnp.ndarray:
     mask_y_max = jnp.zeros_like(s)
     mask_y_max = mask_y_max.at[:, -1, :, :].set(1.0)
 
-    # Shift layer index k on neck boundary crossing
-    s_yp_twisted_zm = apply_non_orientable_neck_twist(jnp.roll(s, shift=(1, -1), axis=(1, 2)))
-    s_ym_twisted_zp = apply_non_orientable_neck_twist(jnp.roll(s, shift=(-1, 1), axis=(1, 2)))
+    # Shift layer index k on neck boundary crossing with dynamic octant parity inversion
+    s_yp_twisted_zm = apply_non_orientable_neck_twist(jnp.roll(s, shift=(1, -1), axis=(1, 2)), parity_vector)
+    s_ym_twisted_zp = apply_non_orientable_neck_twist(jnp.roll(s, shift=(-1, 1), axis=(1, 2)), parity_vector)
 
     s_yp_final = jnp.where(mask_y_min > 0.5, s_yp_twisted_zm, s_yp)
     s_ym_final = jnp.where(mask_y_max > 0.5, s_ym_twisted_zp, s_ym)

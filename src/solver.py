@@ -2,61 +2,42 @@
 Lighthouse Relativity: Solver Module (JAX)
 =========================================
 Strict 3D scan loop across the OZJ Scale-Space Manifold.
-100% branchless execution path from configuration to JIT scan.
+Incorporates prime-locked T-axis indexing, CPT-V octant transformations, and zero control-flow branching.
 """
 
 import jax
 import jax.numpy as jnp
 from typing import Dict, Tuple, Any
 
-from src.operators import extended_bloch_rhs, soft_clamp_state
+from src.operators import extended_bloch_rhs, soft_clamp_state, solve_dynamic_gr_poisson_metric
+from src.cpt_v import CPTVOctantEngine
 
 
-def load_pre_wound_topology_via_action(
+def load_topology_from_frame_zero(
     grid: Dict[str, Any],
-    action_preset_name: str = "flat_vacuum",
-    key: jax.random.PRNGKey = jax.random.PRNGKey(0)
+    frame_zero_bundle: Any
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """Action-driven initial state loader for pre-winding topological defects."""
-    Nx, Ny, Nz = grid['Nx'], grid['Ny'], grid['Nz']
-    X, Y = grid['X'], grid['Y']
+    """Loads pre-wound topological state directly from Levain's FrameZeroBundle compiler output."""
+    Nz = grid['Nz']
+    
+    # Extract complex phase field compiled by Levain baker and project into 3D scale layers
+    base_phase = frame_zero_bundle.complex_phase_field
+    
+    # Broadcast across Nz scale layers with interlayer phase modulation
+    s_layered = jnp.stack([
+        jnp.real(base_phase),
+        jnp.imag(base_phase),
+        jnp.sqrt(jnp.maximum(1.0 - (jnp.abs(base_phase)**2), 0.05)) * jnp.ones_like(base_phase)
+    ], axis=-1)
+    
+    # If Nz > 1, expand along the vertical scale axis
+    if Nz > 1:
+        s_layered = jnp.repeat(s_layered[:, :, jnp.newaxis, :], Nz, axis=2)
+        k_indices = jnp.arange(Nz).reshape(1, 1, Nz, 1)
+        s_layered = s_layered * jnp.cos(k_indices * jnp.pi / Nz)
 
-    if action_preset_name == "binary_merger_initial":
-        r0 = 1.5
-        x1, y1 =  r0, 0.0
-        x2, y2 = -r0, 0.0
-
-        r1_sq = (X - x1)**2 + (Y - y1)**2
-        r2_sq = (X - x2)**2 + (Y - y2)**2
-        sigma = 0.5
-
-        phi1 = jnp.arctan2(Y - y1, X - x1)
-        phi2 = jnp.arctan2(Y - y2, X - x2) + jnp.pi
-
-        w1 = jnp.exp(-r1_sq / (2.0 * sigma**2))
-        w2 = jnp.exp(-r2_sq / (2.0 * sigma**2))
-
-        sx = w1 * jnp.cos(phi1) + w2 * jnp.cos(phi2)
-        sy = w1 * jnp.sin(phi1) + w2 * jnp.sin(phi2)
-        sz = jnp.sqrt(jnp.maximum(1.0 - (sx**2 + sy**2), 0.05))
-
-        s_layered = jnp.stack([sx, sy, sz], axis=-1)
-        norm = jnp.linalg.norm(s_layered, axis=-1, keepdims=True)
-        s_layered = s_layered / jnp.maximum(norm, 1e-8)
-
-    elif action_preset_name in ["early_universe_primordial", "full_cosmic_evolution"]:
-        key_x, key_y, key_z = jax.random.split(key, 3)
-        sx = jax.random.normal(key_x, shape=(Nx, Ny, Nz))
-        sy = jax.random.normal(key_y, shape=(Nx, Ny, Nz))
-        sz = jax.random.normal(key_z, shape=(Nx, Ny, Nz))
-
-        s_layered = jnp.stack([sx, sy, sz], axis=-1)
-        norm = jnp.linalg.norm(s_layered, axis=-1, keepdims=True)
-        s_layered = s_layered / jnp.maximum(norm, 1e-8)
-
-    else:
-        s_layered = jnp.zeros((Nx, Ny, Nz, 3))
-        s_layered = s_layered.at[..., 2].set(1.0)
+    norm = jnp.linalg.norm(s_layered, axis=-1, keepdims=True)
+    s_layered = s_layered / jnp.maximum(norm, 1e-8)
 
     u_drive_layered = jnp.zeros_like(s_layered)
     return s_layered, u_drive_layered
@@ -67,7 +48,7 @@ def run_simulation(
     s_init: jnp.ndarray,
     u: jnp.ndarray,
     Pi_V: jnp.ndarray,
-    omega_larmor_field: jnp.ndarray,  # Required, non-optional
+    omega_larmor_field: jnp.ndarray,
     dt: float = 0.003,
     num_steps: int = 2000,
     Xi: float = 0.8,
@@ -83,32 +64,36 @@ def run_simulation(
     w_larmor: float = 0.0,
     f_triad: Tuple[float, float, float] = (0.0, 0.0, 0.0),
     B1: float = 0.0,
-    is_full_evolution: bool = False,
+    t_axis_start: float = 163.0,
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    """Pure 3D JAX scan loop with zero runtime conditional branching."""
-    w_full_evo = 1.0 if is_full_evolution else 0.0
+    """Pure 3D JAX scan loop integrating CPT-V octant transformations and mirror spiral interference."""
+    X, Y = grid['X'], grid['Y']
 
     def step_fn(carry, step_idx):
         s_current, current_key = carry
-        t_step = step_idx * dt
+        
+        # Prime-locked temporal index progression along the T-axis
+        t_step = t_axis_start + (step_idx * dt)
 
-        tau = step_idx / jnp.maximum(float(num_steps), 1.0)
+        # 1. Evaluate dynamic metric and extract complex phase proxy for octant classification
+        Pi_V_dynamic = solve_dynamic_gr_poisson_metric(s_current, grid)
+        Pi_V_eff = Pi_V + Pi_V_dynamic
+        z_proxy = s_current[..., 0] + 1j * s_current[..., 1]
+        positions = jnp.stack([X, Y, jnp.zeros_like(X)], axis=-1)
 
-        w_inf = 0.5 * (jnp.tanh((tau - 0.15) / 0.05) - jnp.tanh((tau - 0.45) / 0.05))
-        w_late = 0.5 * (1.0 + jnp.tanh((tau - 0.45) / 0.05))
+        # 2. CPT-V Octant Classification & Retrocausal Reflection Mapping
+        octant_indices = CPTVOctantEngine.classify_octants(positions, z_proxy, Pi_V_eff)
+        _, transformed_z, transformed_void = CPTVOctantEngine.apply_cptv_transformation(positions, z_proxy, Pi_V_eff)
 
-        a_inf = jnp.exp(H0 * jnp.maximum(tau - 0.15, 0.0) * 8.0)
-        a_late = a_inf * (1.0 + 0.5 * (tau - 0.45))
-        a_t_evo = (1.0 - w_inf - w_late) * 1.0 + w_inf * a_inf + w_late * a_late
-        a_t_std = 1.0 + H0 * t_step
-        a_t = w_full_evo * a_t_evo + (1.0 - w_full_evo) * a_t_std
+        # 3. Prime-locked mirror spiral interference weighted by CPT-V sector parity
+        prime_distance = jnp.abs(jnp.sin(t_step * jnp.pi / 7.0))
+        octant_parity_modulation = jnp.mean(jnp.cos(octant_indices * jnp.pi / 4.0))
+        mirror_interference_weight = 0.5 * (1.0 - jnp.cos(prime_distance * jnp.pi)) * jnp.abs(octant_parity_modulation)
 
-        H_t_evo = w_inf * H0 + w_late * (0.15 / jnp.maximum(a_t, 1e-4))
-        H_t_std = H0 / jnp.maximum(a_t_std, 1e-4)
-        H_t = w_full_evo * H_t_evo + (1.0 - w_full_evo) * H_t_std
-
-        omega_meta_t = w_full_evo * (omega_meta * (1.0 - w_late) + 0.002 * w_late) + (1.0 - w_full_evo) * omega_meta
-        noise_std_t = w_full_evo * (noise_std * (1.0 - 0.8 * w_late)) + (1.0 - w_full_evo) * noise_std
+        a_t = 1.0 + H0 * t_step
+        H_t = H0 / jnp.maximum(a_t, 1e-4)
+        omega_meta_t = omega_meta + (0.002 * mirror_interference_weight * jnp.mean(jnp.real(transformed_z)))
+        noise_std_t = noise_std * (1.0 - 0.2 * mirror_interference_weight)
 
         current_key, subkey = jax.random.split(current_key)
         noise = noise_std_t * jax.random.normal(subkey, shape=s_current.shape)
@@ -116,7 +101,7 @@ def run_simulation(
         ds_dt = extended_bloch_rhs(
             s=s_current,
             u=u,
-            Pi_V=Pi_V,
+            Pi_V=Pi_V_eff,
             omega_larmor_field=omega_larmor_field,
             grid=grid,
             t_step=t_step,
@@ -140,6 +125,6 @@ def run_simulation(
     initial_carry = (s_init, key)
     step_indices = jnp.arange(num_steps)
 
-    print(f"⚡ Running pure 3D simulation grid ({num_steps} steps, dt={dt})...")
+    print(f"⚡ Running CPT-V coupled 3D simulation grid (T0={t_axis_start}, {num_steps} steps, dt={dt})...")
     (final_carry, _), trajectory = jax.lax.scan(step_fn, initial_carry, step_indices)
     return trajectory, final_carry[0]

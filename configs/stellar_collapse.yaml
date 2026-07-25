@@ -1,0 +1,36 @@
+simulation:
+  name: "stellar_collapse"
+  resolution: [64, 64]
+  nz_layers: 8
+  domain_extents: [6.283185, 6.283185, 10.0]
+  
+  solver_parameters:
+    dt: 0.005
+    num_steps: 2000
+    xi: 0.8
+    t1: 40.0
+    t2: 4.0
+    alpha: 0.3
+    h0: 0.0
+    omega_meta: 0.0
+    kappa_grav: 0.3
+    d_spatial: 0.05
+    d_z: 0.05
+    lambda_scale: 0.02
+    noise_std: 0.005
+
+  seam_operator:
+    parity_inversion_y: true
+    octant_coupling_tensor: [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0]
+
+initial_conditions:
+  t_axis_start: 109
+  
+  defect_clusters:
+    - cluster_id: 1
+      complex_phase_space_z: [0.0 + 10.0j, 0.0 + 0.0j] # Centered at x=0, y=0 with high momentum
+      octant_span_mask: 0x0F
+      nested_ozj_node:
+        local_omega: 4
+        local_zeta_phase: 0.5
+        local_j_invariant: 8000.0

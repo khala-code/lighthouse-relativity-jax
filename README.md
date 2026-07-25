@@ -41,22 +41,22 @@ Below is a reference of the physical and numerical free parameters exposed in `l
 
 ---
 
-# Example Command-Line Configurations
+## Example Command-Line Configurations
 
-### 1. Black Hole Regime (Default)
-Simulates strongly warped spacetime with a massive singularity.
+### 1. Cosmic Evolution Regime
+Simulates the evolution of the early universe.
 ```bash
-python main.py --config black_hole
+python main.py --config cosmic_evolution
 ```
 
-### 2. Early Universe Regime
-Simulates the inflationary epoch with high vacuum energy and rapid expansion.
+### 2. Stellar Collapse Regime
+Simulates the collapse of a massive star, forming a black hole.
 ```bash
-python main.py --config early_universe
+python main.py --config stellar_collapse
 ```
 
-### 3. General Relativity Era
-Simulates the current epoch of GR
+### 3. Binary Merger Regime
+Simulates the merger of two black holes.
 ```bash
-python main.py --config gr_era
+python main.py --config binary_merger
 ```

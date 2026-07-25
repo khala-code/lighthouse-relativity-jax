@@ -12,6 +12,31 @@ from matplotlib import cm
 from scipy.ndimage import gaussian_filter
 from typing import Dict, Any
 
+# Optional import check for openvdb
+try:
+    import openvdb as vdb
+    HAS_VDB = True
+except ImportError:
+    HAS_VDB = False
+
+def save_vdb_frame(q_3d_data, vdb_frame_counter, output_dir="vdb_exports"):
+    """Exports a 3D NumPy/JAX array to an OpenVDB file for Blender."""
+    if not HAS_VDB:
+        print("⚠️ OpenVDB is not installed. Run 'conda install -c conda-forge openvdb' to enable VDB exports.")
+        return
+
+    os.makedirs(output_dir, exist_ok=True)
+    file_path = os.path.join(output_dir, f"frame_{vdb_frame_counter:04d}.vdb")
+    
+    # Create float grid and populate using the correct OpenVDB copy method
+    grid = vdb.FloatGrid()
+    grid.copyFromArray(np.ascontiguousarray(np.real(q_3d_data), dtype=np.float32))
+    
+    # Use FOG_VOLUME for density/gas fields (or assign string directly: grid.gridClass = 'fog volume')
+    grid.gridClass = vdb.GridClass.FOG_VOLUME
+    grid.name = "density"
+    
+    vdb.write(file_path, grids=[grid])
 
 def compute_topological_charge_density(s_2d: np.ndarray, dx: float, dy: float) -> np.ndarray:
     """Computes instant 2D topological charge density q(x,y) = s . (ds/dx x ds/dy) / 4pi."""
@@ -53,7 +78,8 @@ def render_trajectory_frames(
     output_dir: str = "frames",
     n_scale_layers: int = 8,
     dt: float = 0.003,
-    H0: float = 0.0
+    H0: float = 0.0,
+    save_vdb: bool = False,
 ) -> None:
     """Renders 4D OZJ tensor trajectories with dynamic Klein bottle inflation."""
     os.makedirs(output_dir, exist_ok=True)
@@ -71,6 +97,9 @@ def render_trajectory_frames(
     z_max = (Nz / 2.0) * z_layer_spacing + 2.0
 
     print(f"🎬 Exporting expanding 4D OZJ frames to '{output_dir}/' (stride={frame_stride}, H0={H0})...")
+    
+    # Initialize a strict sequential counter for VDB exports
+    vdb_frame_counter = 0
 
     frame_idx = 0
     for t in range(0, num_frames, frame_stride):
@@ -91,27 +120,37 @@ def render_trajectory_frames(
 
         layer_indices = np.linspace(-(Nz - 1) / 2.0, (Nz - 1) / 2.0, Nz)
 
+        # Extract spatial dimensions directly from the 2D mesh grid shape
+        Nx, Ny = X_2d.shape
+        q_3d = np.zeros((Nx, Ny, Nz))
+        
         for k in range(Nz):
             s_k = s_3d[:, :, k, :]
-            sx_k, sy_k, sz_k = s_k[..., 0], s_k[..., 1], s_k[..., 2]
+            q_3d[:, :, k] = compute_topological_charge_density(s_k, dx * a_t, dy * a_t)
+            
+        # Apply a 3D Gaussian filter to let scale-space feedback bleed across layers visually
+        q_3d_smooth = gaussian_filter(q_3d, sigma=(1.0, 1.0, 0.5))
+
+        for k in range(Nz):
+            s_k = s_3d[:, :, k, :]
+            sx_k = np.real(s_k[..., 0])
+            sy_k = np.real(s_k[..., 1])
 
             z_baseline = layer_indices[k] * z_layer_spacing
 
-            q_k = compute_topological_charge_density(s_k, dx * a_t, dy * a_t)
-            sigma_k = 0.2 + 1.2 * (k / max(1, Nz - 1))
-            q_k_smooth = gaussian_filter(q_k, sigma=sigma_k)
-
-            funnel_displacement = 2.5 * np.sign(q_k_smooth) * np.log1p(10.0 * np.abs(q_k_smooth))
+            # Drive displacement using the cross-coupled 3D field 
+            q_k_coupled = q_3d_smooth[:, :, k]
+            funnel_displacement = 2.5 * np.sign(q_k_coupled) * np.log1p(10.0 * np.abs(q_k_coupled))
             Z_layer = z_baseline + funnel_displacement
 
             phase_angle = np.arctan2(sy_k, sx_k)
             norm_phase = (phase_angle + np.pi) / (2.0 * np.pi)
-            colors = cm.twilight_shifted(norm_phase)
+            colors = cm.inferno(norm_phase)
 
             alpha_val = 0.85 - 0.05 * abs(layer_indices[k])
 
             ax1.plot_surface(
-                X_scaled, Y_scaled, Z_layer,
+                np.real(X_scaled), np.real(Y_scaled), np.real(Z_layer),
                 facecolors=colors,
                 rstride=2, cstride=2,
                 linewidth=0,
@@ -119,6 +158,11 @@ def render_trajectory_frames(
                 alpha=alpha_val,
                 antialiased=True
             )
+        
+        # VDB Export (Strict Sequential Naming)
+        if save_vdb:
+            save_vdb_frame(q_3d_smooth, vdb_frame_counter)
+            vdb_frame_counter += 1
 
         ax1.set_title(f"3D Scale Hierarchy | Scale Factor a(t) = {a_t:.2f}", color='white', fontsize=13, fontweight='bold', pad=15)
         ax1.set_xlabel("X - Comoving", color='white')
@@ -140,17 +184,17 @@ def render_trajectory_frames(
 
         k_mid = Nz // 2
         s_mid = s_3d[:, :, k_mid, :]
-        phase_mid = np.arctan2(s_mid[..., 1], s_mid[..., 0])
+        phase_mid = np.arctan2(np.real(s_mid[..., 1]), np.real(s_mid[..., 0]))
         norm_phase_mid = (phase_mid + np.pi) / (2.0 * np.pi)
-        colors_klein = cm.twilight_shifted(norm_phase_mid)
+        colors_klein = cm.inferno(norm_phase_mid)
 
         ax2.plot_surface(
-            x_3d_exp, y_3d_exp, z_3d_exp,
+            np.real(x_3d_exp), np.real(y_3d_exp), np.real(z_3d_exp),
             facecolors=colors_klein,
             rstride=2, cstride=2,
             linewidth=0,
             edgecolor='none',
-            alpha=0.9,
+            alpha=0.95,
             antialiased=True
         )
 
@@ -175,10 +219,7 @@ def plot_field_and_defects(
     dt: float = 0.003,
     H0: float = 0.0
 ) -> None:
-    """
-    Renders diagnostic chart tracking Transverse Excitation Energy,
-    Topological Defect Density RMS, and Longitudinal Relaxation over time.
-    """
+    """Renders diagnostic chart tracking Transverse Excitation Energy, Defect Density RMS, and Longitudinal Relaxation."""
     num_steps = len(trajectory)
     t_axis = np.arange(num_steps) * dt
     dx, dy = grid['dx'], grid['dy']
@@ -186,15 +227,13 @@ def plot_field_and_defects(
 
     print("📊 Computing Transverse Excitation & Defect Relaxation diagnostics...")
 
-    # 1. Transverse Excitation Energy E_trans = <sx^2 + sy^2>
-    sx_all = trajectory[..., 0]
-    sy_all = trajectory[..., 1]
-    sz_all = trajectory[..., 2]
+    sx_all = np.real(trajectory[..., 0])
+    sy_all = np.real(trajectory[..., 1])
+    sz_all = np.real(trajectory[..., 2])
 
     e_transverse = np.mean(sx_all**2 + sy_all**2, axis=(1, 2, 3))
     sz_mean = np.mean(sz_all, axis=(1, 2, 3))
 
-    # 2. Sample Topological Defect Density RMS Q_rms(t) over time
     sample_stride = max(1, num_steps // 200)
     t_samples = np.arange(0, num_steps, sample_stride)
     q_rms_list = []
@@ -212,7 +251,6 @@ def plot_field_and_defects(
     q_rms_arr = np.array(q_rms_list)
     t_sampled_axis = t_samples * dt
 
-    # 3. Construct Multi-Panel Diagnostic Plot
     fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(12, 10), sharex=True, dpi=120)
     fig.patch.set_facecolor('#0a0a10')
 
@@ -223,18 +261,15 @@ def plot_field_and_defects(
         for spine in ax.spines.values():
             spine.set_color('#444466')
 
-    # Panel 1: Transverse Excitation Energy
     ax1.plot(t_axis, e_transverse, color='#00e5ff', linewidth=2.0, label=r"Transverse Energy $\langle s_x^2 + s_y^2 \rangle$")
     ax1.set_ylabel("Excitation Energy", color='white', fontsize=11, fontweight='bold')
     ax1.set_title("Lighthouse Relativity Engine: Cosmological Metric & Defect Relaxation", color='white', fontsize=14, fontweight='bold', pad=12)
     ax1.legend(loc="upper right", facecolor='#0a0a10', edgecolor='white', labelcolor='white')
 
-    # Panel 2: Topological Defect RMS Activity
     ax2.plot(t_sampled_axis, q_rms_arr, color='#ff2a6d', linewidth=2.0, label=r"Defect Activity $Q_{\mathrm{RMS}}(t)$")
     ax2.set_ylabel("Defect Density ($Q_{\mathrm{RMS}}$)", color='white', fontsize=11, fontweight='bold')
     ax2.legend(loc="upper right", facecolor='#0a0a10', edgecolor='white', labelcolor='white')
 
-    # Panel 3: Longitudinal Order Parameter Sz
     ax3.plot(t_axis, sz_mean, color='#00ff66', linewidth=2.0, label=r"Longitudinal Alignment $\langle s_z \rangle$")
     ax3.set_xlabel("Cosmological Time ($t$)", color='white', fontsize=11, fontweight='bold')
     ax3.set_ylabel("Order Parameter ($S_z$)", color='white', fontsize=11, fontweight='bold')

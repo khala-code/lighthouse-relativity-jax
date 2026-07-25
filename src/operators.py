@@ -7,7 +7,7 @@ Universal dynamic GR feedback loop driven entirely by topological charge density
 
 import jax
 import jax.numpy as jnp
-from typing import Dict, Tuple, Any, Optional
+from typing import Dict, Tuple, Any
 
 from src.topology import laplacian_klein
 
@@ -18,6 +18,7 @@ GAMMA_27AL = +69.76e6
 @jax.jit
 def dbi_radical(Pi_V: jnp.ndarray, alpha: float = 0.1) -> jnp.ndarray:
     return 1.0 / jnp.sqrt(1.0 + alpha * (Pi_V ** 2))
+
 
 @jax.jit
 def vertical_scale_laplacian(s: jnp.ndarray, dz: float) -> jnp.ndarray:
@@ -30,9 +31,10 @@ def vertical_scale_gradient(s: jnp.ndarray, dz: float) -> jnp.ndarray:
     """Computes first derivative along the Z scale axis for chiral vertical torque."""
     return (jnp.roll(s, -1, axis=2) - jnp.roll(s, 1, axis=2)) / (2.0 * dz)
 
+
 @jax.jit
 def compute_topological_charge_density_jax(s: jnp.ndarray, dx: float, dy: float) -> jnp.ndarray:
-    """Evaluates local topological charge density q = s . (ds/dx x ds/dy) / 4pi across 3D tensor."""
+    """Evaluates local topological charge density q across 3D tensor."""
     ds_dx = jnp.gradient(s, dx, axis=0)
     ds_dy = jnp.gradient(s, dy, axis=1)
     cross = jnp.cross(ds_dx, ds_dy)
@@ -47,10 +49,7 @@ def solve_dynamic_gr_poisson_metric(
     eta_grav: float = 5.0,
     m_screening: float = 0.2
 ) -> jnp.ndarray:
-    """
-    Branchless Spectral Poisson Solver: Computes dynamic gravitational potential Pi_V
-    directly from local topological charge density energy |q|^2 in Fourier space.
-    """
+    """Branchless Spectral Poisson Solver for gravitational potential Pi_V in Fourier space."""
     dx, dy = grid['dx'], grid['dy']
 
     q = compute_topological_charge_density_jax(s, dx, dy)
@@ -147,7 +146,7 @@ def extended_bloch_rhs(
 ) -> jnp.ndarray:
     dx, dy, dz = grid['dx'], grid['dy'], grid['dz']
 
-    # 1. Superimpose Background Metric Wells (Pi_V) with Dynamic Charge-Density Backreaction
+    # 1. Superimpose Background Metric Wells with Dynamic Charge-Density Backreaction
     Pi_V_dynamic = solve_dynamic_gr_poisson_metric(s, grid, eta_grav=8.0, m_screening=0.15)
     Pi_V_eff = Pi_V + Pi_V_dynamic
 

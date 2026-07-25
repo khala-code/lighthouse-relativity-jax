@@ -1,0 +1,36 @@
+simulation:
+  name: "full_cosmic_evolution"
+  resolution: [64, 64]
+  nz_layers: 8
+  domain_extents: [6.283185, 6.283185, 10.0]
+  
+  solver_parameters:
+    dt: 0.003
+    num_steps: 5000
+    xi: 0.92
+    t1: 60.0
+    t2: 10.0
+    alpha: 0.18
+    h0: 1.5
+    omega_meta: 0.15
+    kappa_grav: 0.5
+    d_spatial: 0.08
+    d_z: 0.05
+    lambda_scale: 0.02
+    noise_std: 0.045
+
+  seam_operator:
+    parity_inversion_y: true
+    octant_coupling_tensor: [1.0, -1.0, 1.0, -1.0, -1.0, 1.0, -1.0, 1.0]
+
+initial_conditions:
+  t_axis_start: 163                  # Prime-locked starting T-value (Heegner threshold)
+  
+  defect_clusters:
+    - cluster_id: 1
+      complex_phase_space_z: [0.0 + 0.0j, 0.0 + 0.0j] # Centered primordial seed
+      octant_span_mask: 0xFF         # Spans all 8 CPT-V octants for primordial macro-inflation seed
+      nested_ozj_node:
+        local_omega: 1
+        local_zeta_phase: 0.5
+        local_j_invariant: 1728.0
