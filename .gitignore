@@ -1,6 +1,8 @@
 frames_*
-frames_*/*
+vdb_exports_*
 *.vtk
 *.mp4
+*.png
+*.vdb
 src/__pycache__
 src/__pycache__/*

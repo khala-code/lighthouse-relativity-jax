@@ -17,6 +17,7 @@ class SimConfig:
     Lx: float = 6.283185
     Ly: float = 6.283185
     Lz: float = 10.0
+    L_patch: float = 1.0       # NEW: The scale of the spacetime patch
     dt: float = 0.003
     num_steps: int = 2000
     Xi: float = 0.8
@@ -105,6 +106,7 @@ def get_binary_merger_config() -> SimConfig:
         Nx=64, Ny=64, Nz=8,
         void_peak=18.0, void_sigma=0.45,
         alpha=0.3, T1=30.0, T2=3.0, H0=0.0,
+        L_patch=0.5,           # Zoom in on the binary system
         Xi=0.8, num_steps=2000, dt=0.005, noise_std=0.005
     )
 

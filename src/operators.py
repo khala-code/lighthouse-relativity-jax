@@ -209,3 +209,79 @@ def extended_bloch_rhs(
 def soft_clamp_state(s: jnp.ndarray) -> jnp.ndarray:
     norm = jnp.linalg.norm(s, axis=-1, keepdims=True)
     return s / jnp.maximum(norm, 1e-8)
+
+
+@jax.jit
+def void_density_rhs(
+    Pi_V: jnp.ndarray, 
+    v_flow: jnp.ndarray, 
+    grid: Dict[str, Any], 
+    nu_diffusion: float = 0.01
+) -> jnp.ndarray:
+    """
+    100% branchless continuous PDE for Void Density evolution.
+    Computes d(Pi_V)/dt via advection and diffusion.
+    """
+    dx, dy = grid['dx'], grid['dy']
+    
+    # 1. Spatial Diffusion (Radiative decay of sharp metric wells)
+    # Reusing your existing branchless laplacian[cite: 4]
+    diffusion = nu_diffusion * laplacian_klein(Pi_V, grid)
+    
+    # 2. Advection: -∇ • (Pi_V * v_flow)
+    # v_flow has shape (Nx, Ny, Nz, 2) for X and Y velocities
+    flux_x = Pi_V * v_flow[..., 0]
+    flux_y = Pi_V * v_flow[..., 1]
+    
+    dflux_dx = jnp.gradient(flux_x, dx, axis=0)
+    dflux_dy = jnp.gradient(flux_y, dy, axis=1)
+    
+    advection = -(dflux_dx + dflux_dy)
+    
+    return diffusion + advection
+
+@jax.jit
+def momentum_flow_rhs(
+    v_flow: jnp.ndarray,
+    Pi_V: jnp.ndarray,
+    grid: Dict[str, Any],
+    nu_viscosity: float = 0.05,
+    kappa_drag: float = 0.1
+) -> jnp.ndarray:
+    """
+    100% branchless continuous PDE for Momentum Flow (v_flow) evolution.
+    Applies advection, viscous diffusion, and Void Density gravitational drag.
+    """
+    dx, dy = grid['dx'], grid['dy']
+
+    # Extract spatial components
+    vx, vy, vz = v_flow[..., 0], v_flow[..., 1], v_flow[..., 2]
+
+    # 1. Self-Advection: - (v • ∇) v
+    dvx_dx = jnp.gradient(vx, dx, axis=0)
+    dvx_dy = jnp.gradient(vx, dy, axis=1)
+
+    dvy_dx = jnp.gradient(vy, dx, axis=0)
+    dvy_dy = jnp.gradient(vy, dy, axis=1)
+
+    adv_x = -(vx * dvx_dx + vy * dvx_dy)
+    adv_y = -(vx * dvy_dx + vy * dvy_dy)
+    adv_z = jnp.zeros_like(vz)
+
+    advection = jnp.stack([adv_x, adv_y, adv_z], axis=-1)
+
+    # 2. Viscous Diffusion (Reuses your existing branchless scale-space laplacian)
+    diffusion = nu_viscosity * laplacian_klein(v_flow, grid)
+
+    # 3. Gravitational Drag Force: -∇(Pi_V)
+    # The gradient of the metric well physically accelerates the spacetime flow
+    dPi_dx = jnp.gradient(Pi_V, dx, axis=0)
+    dPi_dy = jnp.gradient(Pi_V, dy, axis=1)
+    
+    force_x = kappa_drag * dPi_dx
+    force_y = kappa_drag * dPi_dy
+    force_z = jnp.zeros_like(dPi_dx)
+
+    forcing = jnp.stack([force_x, force_y, force_z], axis=-1)
+
+    return advection + diffusion + forcing

@@ -57,7 +57,7 @@ def apply_non_orientable_neck_twist(field: jnp.ndarray) -> jnp.ndarray:
 def laplacian_klein(s: jnp.ndarray, grid: Dict[str, Any]) -> jnp.ndarray:
     """
     Branchless 3D Laplacian for stacked OZJ Scale-Space tensors.
-    Twists parity AND shifts scale layer k across the y-boundary.
+    Dynamically handles both 4D vector fields (spin) and 3D scalar fields (Void Density).
     """
     dx, dy, dz = grid['dx'], grid['dy'], grid['dz']
 
@@ -73,14 +73,24 @@ def laplacian_klein(s: jnp.ndarray, grid: Dict[str, Any]) -> jnp.ndarray:
     s_ym = jnp.roll(s, shift=-1, axis=1)
 
     mask_y_min = jnp.zeros_like(s)
-    mask_y_min = mask_y_min.at[:, 0, :, :].set(1.0)
+    # Use Ellipsis (...) to handle any number of trailing dimensions automatically
+    mask_y_min = mask_y_min.at[:, 0, ...].set(1.0)
 
     mask_y_max = jnp.zeros_like(s)
-    mask_y_max = mask_y_max.at[:, -1, :, :].set(1.0)
+    mask_y_max = mask_y_max.at[:, -1, ...].set(1.0)
 
     # Shift layer index k on neck boundary crossing
-    s_yp_twisted_zm = apply_non_orientable_neck_twist(jnp.roll(s, shift=(1, -1), axis=(1, 2)))
-    s_ym_twisted_zp = apply_non_orientable_neck_twist(jnp.roll(s, shift=(-1, 1), axis=(1, 2)))
+    rolled_zm = jnp.roll(s, shift=(1, -1), axis=(1, 2))
+    rolled_zp = jnp.roll(s, shift=(-1, 1), axis=(1, 2))
+
+    # Only apply the vector parity twist if it is a 4D vector field
+    if s.ndim == 4:
+        s_yp_twisted_zm = apply_non_orientable_neck_twist(rolled_zm)
+        s_ym_twisted_zp = apply_non_orientable_neck_twist(rolled_zp)
+    else:
+        # Scalar fields (like Pi_V) cross the neck without vector inversion
+        s_yp_twisted_zm = rolled_zm
+        s_ym_twisted_zp = rolled_zp
 
     s_yp_final = jnp.where(mask_y_min > 0.5, s_yp_twisted_zm, s_yp)
     s_ym_final = jnp.where(mask_y_max > 0.5, s_ym_twisted_zp, s_ym)

@@ -10,7 +10,34 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib import cm
 from scipy.ndimage import gaussian_filter
-from typing import Dict, Any
+from typing import Dict, Any, Tuple
+
+try:
+    import openvdb as vdb
+    HAS_VDB = True
+except ImportError:
+    HAS_VDB = False
+
+
+def save_vdb_frame(grids_dict: Dict[str, np.ndarray], vdb_frame_counter: int, output_dir: str = "vdb_exports"):
+    """Exports multiple 3D NumPy arrays to a single multi-grid OpenVDB file for Blender."""
+    if not HAS_VDB:
+        print("⚠️ OpenVDB is not installed. Run 'conda install -c conda-forge openvdb' to enable VDB exports.")
+        return
+
+    os.makedirs(output_dir, exist_ok=True)
+    file_path = os.path.join(output_dir, f"frame_{vdb_frame_counter:04d}.vdb")
+    
+    vdb_grids = []
+    for grid_name, data_3d in grids_dict.items():
+        # Create float grid and populate using OpenVDB copy method
+        grid = vdb.FloatGrid()
+        grid.copyFromArray(np.ascontiguousarray(np.real(data_3d), dtype=np.float32))
+        grid.gridClass = vdb.GridClass.FOG_VOLUME
+        grid.name = grid_name
+        vdb_grids.append(grid)
+        
+    vdb.write(file_path, grids=vdb_grids)
 
 
 def compute_topological_charge_density(s_2d: np.ndarray, dx: float, dy: float) -> np.ndarray:
@@ -48,16 +75,20 @@ def embedded_klein_bottle_3d(X_2d: np.ndarray, Y_2d: np.ndarray, scale_a: float 
 
 def render_trajectory_frames(
     grid: Dict[str, Any],
-    trajectory: np.ndarray,
+    trajectory_tuple: Tuple[np.ndarray, np.ndarray, np.ndarray],
     frame_stride: int = 20,
     output_dir: str = "frames",
+    vdb_output_dir: str = "vdb_exports",
+    export_vdb: bool = False,
     n_scale_layers: int = 8,
     dt: float = 0.003,
     H0: float = 0.0
 ) -> None:
-    """Renders 4D OZJ tensor trajectories with dynamic Klein bottle inflation."""
+    """Renders 4D OZJ tensor trajectories AND exports multi-channel OpenVDB files for Blender."""
+    s_history, pi_v_history, v_flow_history = trajectory_tuple
+    
     os.makedirs(output_dir, exist_ok=True)
-    num_frames = len(trajectory)
+    num_frames = len(s_history)
 
     Lx, Ly = grid['Lx'], grid['Ly']
     dx, dy = grid['dx'], grid['dy']
@@ -70,13 +101,40 @@ def render_trajectory_frames(
     z_layer_spacing = 1.8
     z_max = (Nz / 2.0) * z_layer_spacing + 2.0
 
-    print(f"🎬 Exporting expanding 4D OZJ frames to '{output_dir}/' (stride={frame_stride}, H0={H0})...")
+    print(f"🎬 Exporting expanding 4D frames & VDBs (stride={frame_stride})...")
 
     frame_idx = 0
+    vdb_counter = 0
+    
     for t in range(0, num_frames, frame_stride):
-        s_3d = np.array(trajectory[t])
+        s_3d = np.array(s_history[t])
+        pi_v_3d = np.array(pi_v_history[t])
+        v_flow_3d = np.array(v_flow_history[t])
+        
         t_step = t * dt
         a_t = 1.0 + H0 * t_step
+
+        if export_vdb:
+            # --- 1. Export OpenVDB Frame for Blender ---
+            # Compute topological charge density across the 3D volume for VDB export
+            q_3d = np.zeros((grid['Nx'], grid['Ny'], Nz))
+            for k in range(Nz):
+                q_3d[:, :, k] = compute_topological_charge_density(s_3d[:, :, k, :], dx * a_t, dy * a_t)
+
+            save_vdb_frame({
+                "topological_charge": q_3d,
+                "void_density": pi_v_3d,
+                "velocity_magnitude": np.linalg.norm(v_flow_3d, axis=-1)
+            }, vdb_frame_counter=vdb_counter, output_dir=vdb_output_dir)
+            vdb_counter += 1
+
+        # --- 2. Matplotlib Matplotlib/PNG Rendering ---
+        X_scaled = X_2d * a_t
+        Y_scaled = Y_2d * a_t
+        x_3d_exp, y_3d_exp, z_3d_exp = embedded_klein_bottle_3d(X_2d, Y_2d, scale_a=a_t)
+
+        fig = plt.figure(figsize=(18, 8), dpi=110)
+        fig.patch.set_facecolor('#0a0a10')
 
         X_scaled = X_2d * a_t
         Y_scaled = Y_2d * a_t
@@ -95,10 +153,14 @@ def render_trajectory_frames(
             s_k = s_3d[:, :, k, :]
             sx_k, sy_k, sz_k = s_k[..., 0], s_k[..., 1], s_k[..., 2]
 
-            z_baseline = layer_indices[k] * z_layer_spacing
+            # Represent AdS bulk depth via an exponentially expanding baseline
+            depth = np.abs(layer_indices[k])
+            z_baseline = np.sign(layer_indices[k]) * (1.0 - np.exp(-depth / 1.5)) * 6.0
 
             q_k = compute_topological_charge_density(s_k, dx * a_t, dy * a_t)
-            sigma_k = 0.2 + 1.2 * (k / max(1, Nz - 1))
+            
+            # Increase blur/diffusion aggressively for deeper bulk layers
+            sigma_k = 0.2 + 2.5 * (depth / max(1, (Nz - 1)/2))
             q_k_smooth = gaussian_filter(q_k, sigma=sigma_k)
 
             funnel_displacement = 2.5 * np.sign(q_k_smooth) * np.log1p(10.0 * np.abs(q_k_smooth))
@@ -108,7 +170,8 @@ def render_trajectory_frames(
             norm_phase = (phase_angle + np.pi) / (2.0 * np.pi)
             colors = cm.twilight_shifted(norm_phase)
 
-            alpha_val = 0.85 - 0.05 * abs(layer_indices[k])
+            # Dramatically reduce opacity for deeper layers to emphasize the boundary
+            alpha_val = 0.95 * np.exp(-depth / 1.2)
 
             ax1.plot_surface(
                 X_scaled, Y_scaled, Z_layer,
@@ -162,10 +225,10 @@ def render_trajectory_frames(
 
         frame_path = os.path.join(output_dir, f"frame_{frame_idx:04d}.png")
         plt.savefig(frame_path, bbox_inches='tight', facecolor=fig.get_facecolor())
-        plt.close()
+        plt.close(fig)
         frame_idx += 1
 
-    print(f"✅ Exported {frame_idx} expanding manifold frames.")
+    print(f"✅ Exported {frame_idx} frames and {vdb_counter} OpenVDB volumes.")
 
 
 def plot_field_and_defects(

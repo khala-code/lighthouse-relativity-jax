@@ -14,7 +14,6 @@ from src.topology import create_klein_grid
 from src.operators import create_quartz_lattice_with_al_impurities, compute_physical_larmor_field
 from src.solver import run_simulation, load_pre_wound_topology_via_action
 from src.visualization import render_trajectory_frames, plot_field_and_defects
-from src.export_3d import export_trajectory_to_vtk_volume
 
 
 def main():
@@ -29,7 +28,7 @@ def main():
     parser.add_argument("--steps", type=int, default=None, help="Override number of simulation time steps")
     parser.add_argument("--dt", type=float, default=None, help="Override integration time step size")
     parser.add_argument("--stride", type=int, default=20, help="Frame rendering stride for video animation")
-    parser.add_argument("--vtk", action="store_true", help="Export 3D volumetric VTK dataset (.vtk) for ParaView")
+    parser.add_argument("--vdb", action="store_true", help="Export 3D volumetric OpenVDB dataset (.vdb) for Blender")
     args = parser.parse_args()
 
     print(f"🚀 Initializing 3D OZJ Engine with preset: '{args.config}'")
@@ -56,7 +55,7 @@ def main():
     else:
         action_preset = "flat_vacuum"
 
-    s_0, drive_u = load_pre_wound_topology_via_action(grid=grid, action_preset_name=action_preset, key=key)
+    s_0, drive_u, Pi_V, v_flow = load_pre_wound_topology_via_action(grid=grid, action_preset_name=action_preset, key=key)
 
     X, Y = grid['X'], grid['Y']
 
@@ -91,14 +90,16 @@ def main():
 
     is_full_evo = (args.config == "full_cosmic_evolution")
 
-    trajectory, final_state = run_simulation(
+    trajectory_tuple, final_state = run_simulation(
         grid=grid,
         s_init=s_0,
         u=drive_u,
         Pi_V=void_density,
+        v_flow=v_flow,
         omega_larmor_field=omega_larmor_field,
         dt=dt,
         num_steps=num_steps,
+        L_patch=cfg.L_patch,
         Xi=cfg.Xi,
         T1=cfg.T1,
         T2=cfg.T2,
@@ -115,35 +116,30 @@ def main():
         is_full_evolution=is_full_evo,
     )
 
-    output_dir = f"frames_{args.config}"
-    print(f"🎨 Rendering output frames to '{output_dir}/'...")
-    render_trajectory_frames(
-        grid=grid,
-        trajectory=trajectory,
-        frame_stride=args.stride,
-        output_dir=output_dir,
-        n_scale_layers=cfg.Nz,
-        dt=dt,
-        H0=cfg.H0
-    )
+    s_history, Pi_V_history, v_flow_history = trajectory_tuple
 
     diag_filename = f"lighthouse_relaxation_{args.config}.png"
     plot_field_and_defects(
         grid=grid,
-        trajectory=trajectory,
+        trajectory=s_history,
         output_filename=diag_filename,
         dt=dt,
         H0=cfg.H0
     )
-
-    if args.vtk or True:
-        vtk_filename = f"kleinion_{args.config}.vtk"
-        export_trajectory_to_vtk_volume(
-            grid=grid,
-            trajectory=trajectory,
-            output_filename=vtk_filename,
-            n_scale_layers=cfg.Nz
-        )
+    
+    output_dir = f"frames_{args.config}"
+    vdb_output_dir = f"vdb_exports_{args.config}"
+    print(f"🎨 Rendering output frames to '{output_dir}/'...")
+    render_trajectory_frames(
+        grid=grid,
+        trajectory_tuple=trajectory_tuple,
+        frame_stride=20,
+        output_dir=output_dir,
+        vdb_output_dir=vdb_output_dir,
+        export_vdb=args.vdb,
+        dt=dt,
+        H0=cfg.H0
+    )
 
     print(f"✨ Simulation completed successfully for '{args.config}'!")
 

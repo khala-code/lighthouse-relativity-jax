@@ -15,6 +15,8 @@ from .operators import (
     create_quartz_lattice_with_al_impurities,
     compute_physical_larmor_field,
     solve_dynamic_gr_poisson_metric,
+    void_density_rhs,
+    momentum_flow_rhs,
 )
 from .solver import (
     run_simulation,
@@ -32,4 +34,6 @@ __all__ = [
     "solve_dynamic_gr_poisson_metric",
     "run_simulation",
     "load_pre_wound_topology_via_action",
+    "void_density_rhs",
+    "momentum_flow_rhs",
 ]
